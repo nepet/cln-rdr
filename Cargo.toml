@@ -1,0 +1,16 @@
+[package]
+name = "cln-radar"
+version = "0.1.0"
+edition = "2024"
+authors = ["Peter Neuroth <pet.v.ne@gmail.com>"]
+
+[[bin]]
+name = "rdr"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+lnsocket = "0.5.2"
+serde_json = "1"
