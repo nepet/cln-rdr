@@ -1,8 +1,28 @@
 [package]
-name = "cln-radar"
+name = "cln-rdr"
 version = "0.1.0"
 edition = "2024"
 authors = ["Peter Neuroth <pet.v.ne@gmail.com>"]
+
+rust-version = "1.85"
+
+description = "CLI for calling Core Lightning Commando RPCs over lnsocket."
+readme = "README.md"
+license = "MIT"
+
+repository = "https://github.com/nepet/cln-rdr"
+homepage = "https://github.com/nepet/cln-rdr"
+documentation = "https://docs.rs/cln-rdr"
+
+keywords = ["lightning", "cln", "commando", "lnsocket", "bitcoin"]
+categories = ["command-line-utilities", "network-programming"]
+
+include = [
+  "src/**",
+  "README.md",
+  "LICENSE",
+  "Cargo.toml",
+]
 
 [[bin]]
 name = "rdr"
