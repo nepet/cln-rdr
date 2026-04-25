@@ -1,51 +1,180 @@
+use anyhow::{Context, Error, Result};
 use clap::Parser;
 use lnsocket::{
-    bitcoin::secp256k1::{rand, PublicKey, SecretKey},
     CommandoClient, LNSocket,
+    bitcoin::secp256k1::{PublicKey, SecretKey, rand},
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::str::FromStr;
-use anyhow::{Context, Result};
 
 #[derive(Parser, Debug)]
 #[command(name = "rdr")]
 #[command(about = "CLN-RADAR: Tactical Node Uplink", long_about = None)]
-struct Args {
-    /// Remote CLN node pubkey (33-byte compressed hex)
+#[command(after_help = "\
+Examples:
+  rdr -R AUTH 02abc...@cln.example.com:9735 getinfo
+  rdr -R AUTH 02abc...@cln.example.com:9735 -k showrunes rune=xyz
+")]
+pub struct Args {
+    /// Connection target in the form <nodeid@host:port>
+    #[arg(value_name = "NODEID@HOST:PORT")]
+    pub connect: ConnectInfo,
+
+    /// RPC method name
+    pub method: String,
+
+    /// Positional params, or key=value pairs with -k
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub params: Vec<String>,
+
+    /// Commando auth rune
+    #[arg(short = 'R', long = "auth", env = "CLN_COMMANDO_RUNE")]
+    pub auth: String,
+
+    /// Treat params as key=value pairs
+    #[arg(short = 'k', long = "named")]
+    pub named: bool,
+
+    /// Treat every param value as plain text
     #[arg(long)]
-    node: String,
+    pub text: bool,
 
-    /// Remote address, e.g. example.com:9735 or abcdef.onion:9735
-    #[arg(long)]
-    addr: String,
+    /// Require every param value to be valid JSON
+    #[arg(long, conflicts_with = "text")]
+    pub strict_json: bool,
+}
 
-    /// Commando rune
-    #[arg(long)]
-    rune: String,
+#[derive(Debug, Clone)]
+pub struct ConnectInfo {
+    pub node_id: PublicKey,
+    pub addr: String,
+}
 
-    /// RPC method, e.g. getinfo
-    method: String,
+impl FromStr for ConnectInfo {
+    type Err = String;
 
-    /// JSON params object, e.g. '{}' or '{"id":"..."}'
-    #[arg(default_value = "{}")]
-    params: String,
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let (node, addr) = s.split_once('@').ok_or_else(|| {
+            "invalid CONNECT: expected <nodeid@host:port>, for example 02abc...@example.com:9735"
+                .to_owned()
+        })?;
+
+        if node.is_empty() {
+            return Err("invalid CONNECT: missing node id before '@'".to_owned());
+        }
+
+        if addr.is_empty() {
+            return Err("invalid CONNECT: missing host:port after '@'".to_owned());
+        }
+
+        if !addr.contains(':') {
+            return Err("invalid CONNECT: expected host:port after '@'".to_owned());
+        }
+
+        let node_id = PublicKey::from_str(node)
+            .map_err(|e| format!("invalid CONNECT: bad node pubkey: {e}"))?;
+
+        Ok(ConnectInfo {
+            node_id,
+            addr: addr.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParamMode {
+    Auto,
+    Text,
+    StrictJson,
+}
+
+impl Args {
+    fn param_mode(&self) -> ParamMode {
+        if self.text {
+            ParamMode::Text
+        } else if self.strict_json {
+            ParamMode::StrictJson
+        } else {
+            ParamMode::Auto
+        }
+    }
+}
+
+fn parse_value(s: &str, mode: ParamMode) -> Result<Value, String> {
+    match mode {
+        ParamMode::Text => Ok(Value::String(s.to_owned())),
+        ParamMode::Auto => {
+            Ok(serde_json::from_str::<Value>(s).unwrap_or_else(|_| Value::String(s.to_owned())))
+        }
+        ParamMode::StrictJson => {
+            serde_json::from_str::<Value>(s).map_err(|e| format!("invalid JSON value `{s}`: {e}"))
+        }
+    }
+}
+
+fn parse_params(force_named: bool, mode: ParamMode, raw: &[String]) -> Result<Value, String> {
+    let named = force_named || raw.first().is_some_and(|s| s.contains('='));
+
+    if named {
+        let mut obj = Map::new();
+
+        for item in raw {
+            let (k, v) = item
+                .split_once('=')
+                .ok_or_else(|| format!("expected key=value, got `{item}`"))?;
+
+            if k.is_empty() {
+                return Err(format!("empty key in `{item}`"));
+            }
+
+            obj.insert(k.to_owned(), parse_value(v, mode)?);
+        }
+
+        Ok(Value::Object(obj))
+    } else {
+        raw.iter()
+            .map(|s| parse_value(s, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array)
+    }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("error: {:#}", err);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
 
-    let remote_pubkey = PublicKey::from_str(&args.node).with_context(|| format!("node={} is not a valid public key.", &args.node))?;
-    let params: Value = serde_json::from_str(&args.params)?;
+    let target = format!("{}@{}", args.connect.node_id, args.connect.addr);
+    let method = args.method.clone();
 
-    // Ephemeral local key for the LN transport session.
+    let params = parse_params(args.named, args.param_mode(), &args.params)
+        .map_err(Error::msg)
+        .with_context(|| format!("invalid parameters for RPC `{method}`"))?;
+
     let local_key = SecretKey::new(&mut rand::thread_rng());
 
-    let sock = LNSocket::connect_and_init(local_key, remote_pubkey, &args.addr).await.context("failed to connect to remote node.");
-    let client = CommandoClient::spawn(sock, args.rune);
+    let sock = LNSocket::connect_and_init(local_key, args.connect.node_id, &args.connect.addr)
+        .await
+        .map_err(Error::msg)
+        .with_context(|| format!("failed to connect to remote node `{target}`"))?;
 
-    let result = client.call(args.method, params).await.with_context(|| format!("failed to call {} with params {}", &args.method, &params));
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    let client = CommandoClient::spawn(sock, args.auth);
 
+    let result = client
+        .call(method.clone(), params)
+        .await
+        .map_err(Error::msg)
+        .with_context(|| format!("RPC `{method}` failed on `{target}`"))?;
+
+    let pretty = serde_json::to_string_pretty(&result)
+        .context("failed to render RPC response as pretty JSON")?;
+
+    println!("{pretty}");
     Ok(())
 }
