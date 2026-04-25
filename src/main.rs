@@ -14,6 +14,7 @@ use std::str::FromStr;
 Examples:
   rdr -R AUTH 02abc...@cln.example.com:9735 getinfo
   rdr -R AUTH 02abc...@cln.example.com:9735 -k showrunes rune=xyz
+  rdr -R AUTH 02abc...@cln.example.com:9735 showrunes --params-json '{\"rune\":\"xyz\"}'
 ")]
 pub struct Args {
     /// Connection target in the form <nodeid@host:port>
@@ -23,8 +24,20 @@ pub struct Args {
     /// RPC method name
     pub method: String,
 
+    /// Full JSON params payload, passed through as-is
+    #[arg(
+            long = "params-json",
+            value_name = "JSON",
+            conflicts_with_all(["named", "text", "strict_json", "params"])
+        )]
+    pub params_json: Option<String>,
+
     /// Positional params, or key=value pairs with -k
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        conflicts_with = "params_json"
+    )]
     pub params: Vec<String>,
 
     /// Commando auth rune
@@ -112,7 +125,17 @@ fn parse_value(s: &str, mode: ParamMode) -> Result<Value, String> {
     }
 }
 
-fn parse_params(force_named: bool, mode: ParamMode, raw: &[String]) -> Result<Value, String> {
+fn parse_params(
+    params_json: Option<&str>,
+    force_named: bool,
+    mode: ParamMode,
+    raw: &[String],
+) -> Result<Value, String> {
+    if let Some(json) = params_json {
+        return serde_json::from_str::<Value>(json)
+            .map_err(|e| format!("invalid JSON for --params-json: {e}"));
+    }
+
     let named = force_named || raw.first().is_some_and(|s| s.contains('='));
 
     if named {
@@ -153,9 +176,14 @@ async fn run() -> Result<()> {
     let target = format!("{}@{}", args.connect.node_id, args.connect.addr);
     let method = args.method.clone();
 
-    let params = parse_params(args.named, args.param_mode(), &args.params)
-        .map_err(Error::msg)
-        .with_context(|| format!("invalid parameters for RPC `{method}`"))?;
+    let params = parse_params(
+        args.params_json.as_deref(),
+        args.named,
+        args.param_mode(),
+        &args.params,
+    )
+    .map_err(Error::msg)
+    .with_context(|| format!("invalid parameters for RPC `{method}`"))?;
 
     let local_key = SecretKey::new(&mut rand::thread_rng());
 
