@@ -25,26 +25,12 @@ It is designed around three explicit ways to supply RPC parameters:
 - A valid Commando rune for that node
 - Network reachability to the node's Lightning port
 
-## Installation
+## Install
 
-### From crates.io
-
-```bash
-cargo install cln-rdr
-```
-
-Cargo installs binaries into Cargo's bin directory, which is typically:
-
-```text
-$HOME/.cargo/bin
-```
-
-Make sure that directory is on your `PATH`.
-
-After installation, you can run:
+### crates.io
 
 ```bash
-rdr --help
+cargo install <CRATE_NAME>
 ```
 
 ### From source
@@ -63,6 +49,13 @@ The resulting binary will be at:
 
 ```bash
 ./target/release/rdr
+```
+
+### Homebrew
+
+```bash
+brew tap nepet/tap
+brew install rdr
 ```
 
 ## Usage
