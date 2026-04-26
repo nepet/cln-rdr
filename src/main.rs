@@ -41,7 +41,12 @@ pub struct Args {
     pub params: Vec<String>,
 
     /// Commando auth rune
-    #[arg(short = 'R', long = "auth", env = "CLN_COMMANDO_RUNE")]
+    #[arg(
+        short = 'R',
+        long = "auth",
+        env = "CLN_COMMANDO_RUNE",
+        hide_env_values = true
+    )]
     pub auth: String,
 
     /// Treat params as key=value pairs
